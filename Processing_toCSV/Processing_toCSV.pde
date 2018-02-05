@@ -72,8 +72,16 @@ void serialEvent(Serial myPort){
     if (value == 255)//The % is a modulus, a math operator that signifies remainder after division. The if statement checks if readingCounter is a multiple of numReadings (the remainder of readingCounter/numReadings is 0)
       {
         value = 0;
-        fileName = str(year()) + str(month()) + str(day()) + str(dataTable.lastRowIndex()); //this filename is of the form year+month+day+readingCounter
+        fileName = str(year()) + str(month()) + str(minute()) + str(dataTable.lastRowIndex()); //this filename is of the form year+month+day+readingCounter
         saveTable(dataTable, fileName, "csv"); //Woo! save it to your computer. It is ready for all your spreadsheet dreams.
+        dataTable = new Table();
+        dataTable.addColumn("id"); //This column stores a unique identifier for each record. We will just count up from 0 – so your first reading will be ID 0, your second will be ID 1, etc.
+
+        //the following are dummy columns for each data value. Add as many columns as you have data values. Customize the names as needed. Make sure they are in the same order as the order that Arduino is sending them!
+        dataTable.addColumn("sensor1");
+        dataTable.addColumn("sensor2");
+        dataTable.addColumn("sensor3");
+
       }
     }
   }

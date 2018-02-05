@@ -26,7 +26,7 @@ duration = 0.1
 freq = 440
 
 #image testing
-frame = cv2.imread('hall1.jpg')
+#frame = cv2.imread('hall1.jpg')
 
 #video capture object
 cap = cv2.VideoCapture(0)
@@ -35,6 +35,12 @@ ret, frame = cap.read()
 frame = cv2.resize(frame, (0,0), fx=0.5, fy=0.5)
 height, width, channels = frame.shape
 
+#for moving average
+oldLines = [[]]
+oldIntersects = []
+
+#speed
+speed = chr(0)
 
 #serial object
 s = False
@@ -51,15 +57,25 @@ while(True):
    frame = cv2.resize(frame, (0,0), fx=0.5, fy=0.5)
    frame = cv2.GaussianBlur(frame, (3,3),0)
    slopeIntercept = []
+   newIntersects = []
    lineIntersects = []
 
    #our operations on the frame come here
    gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
    edges = cv2.Canny(gray, 50, 150)
-   lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180, threshold=50, minLineLength=100, maxLineGap=30)
-   if lines is None:
+   newLines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180, threshold=50, minLineLength=100, maxLineGap=30)
+
+   if newLines is None:
+      if oldLines is None:
+         if s:
+            ser.write(chr(0).encode())
+         continue
+      lines = oldLines
+      oldLines = None
       print("No Lines!")
-      continue
+   else:
+      newLines = newLines.tolist()
+      lines = newLines if oldLines is None else newLines + oldLines
 
    for line in lines:
       for x1,y1,x2,y2 in line:
@@ -70,44 +86,53 @@ while(True):
          intercept = y1 - x1*slope
          slopeIntercept.append([slope,intercept])
 
+   #align the horizon line
+   slopeIntercept.append([0, height/2])
+   cv2.line(frame, (0, round(height/2)), (width, round(height/2)), (0, 0, 255), 2)
    
-   slopeIntercept = [x for x in slopeIntercept if (abs(x[0]) < 3 and abs(x[0]) > 0.1)]
-   [cv2.line(frame, (0, int(x[1])), (1000, int(x[0]*1000 + x[1])), (0,0,255), 2) for x in slopeIntercept]
+   slopeIntercept = [x for x in slopeIntercept if (abs(x[0]) < 3 and abs(x[0]) > 0.1) ]
+   #[cv2.line(frame, (0, int(x[1])), (1000, int(x[0]*1000 + x[1])), (0,0,255), 2) for x in slopeIntercept]
 
    #calculate intercepts
    for i, si1 in enumerate(slopeIntercept):
       for si2 in slopeIntercept[i+1:]:
          if abs(si1[0] - si2[0]) > 0.5:
-            lineIntersects.append(intersect(si1, si2))
+            newIntersects.append(intersect(si1, si2))
 
+   if len(oldIntersects) > 0:
+      lineIntersects = lineIntersects + oldIntersects
+   if len(newIntersects) > 0:
+      lineIntersects = lineIntersects + newIntersects
+   
    numIntersects = len(lineIntersects)
-   if numIntersects == 0:
-      print("no intersects!")
-      continue
-   sum_x = sum([x[0] for x in lineIntersects])
-   sum_y = sum([y[1] for y in lineIntersects])
-   avg_x = int(sum_x/numIntersects)
-   avg_y = int(sum_y/numIntersects)
+   if numIntersects != 0:
+      sum_x = sum([x[0] for x in lineIntersects])
+      sum_y = sum([y[1] for y in lineIntersects])
+      avg_x = int(sum_x/numIntersects)
+      avg_y = int(sum_y/numIntersects)
 
-   color_x = avg_x if avg_x < width else width
-   color_x = color_x if color_x > 0 else 0
+      color_x = avg_x if avg_x < width else width
+      color_x = color_x if color_x > 0 else 0
 
-   #print(int(255/width*color_x))
-   speed = chr(int(255/width*color_x))
+      #print(int(255/width*color_x))
+      speed = chr(int(255/width*color_x))
 
-   color_x = 2*abs(width/2 - color_x)
-   #this is where the avg circle is drawn
-   cv2.circle(frame, (avg_x, avg_y), 10, (0, 255-color_x, color_x), -1)
-   #display the resulting frame
-   cv2.imshow('frame', frame)
+      color_x = 2*abs(width/2 - color_x)
+      #this is where the avg circle is drawn
+      cv2.circle(frame, (avg_x, avg_y), 10, (0, 255-color_x, color_x), -1)
+
    if cv2.waitKey(1) & 0xFF == ord('q'):
       break
-   
+   #display the resulting frame
+   cv2.imshow('frame', frame)
    #Send location of VP to Arduino
    if s:
-      pass
       ser.write(speed.encode())
 
+   #adjust the moving average
+   if newLines is not None:
+      oldLines = newLines
+   oldIntersects = newIntersects
 
 if s:
    ser.write(chr(0).encode())

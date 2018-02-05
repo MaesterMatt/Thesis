@@ -38,8 +38,8 @@ void loop() {
       stopIfFault();
     }
     else{
-      md.setM1Speed(map(immap, 0, 256, 0, 256));
-      md.setM2Speed(map(immap, 0, 256, 240, 0));      
+      md.setM1Speed(map(immap, 0, 256, 100, 256));
+      md.setM2Speed(map(immap, 0, 256, 240, 100));      
     }
   }
 }
