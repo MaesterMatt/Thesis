@@ -56,7 +56,7 @@ while (cap.isOpened()):
    edges = cv2.Canny(gray, 50, 150)
    for(x1,y1,x2,y2) in pick:
       cv2.rectangle(edges, (x1,y1), (x2,y2), 0,thickness=-1)
-   lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180, threshold=(50 - len(pick)*3), minLineLength=30, maxLineGap=30)
+   lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180, threshold=(50 - len(pick)*3), minLineLength=50, maxLineGap=30)
 
    for xa,ya,xb,yb in pick:
       lines = [[(x1,y1,x2,y2) for x1,y1,x2,y2 in line if not ((xa < x1 and x1 < xb and xa < x2 and x2 < xb)and(ya<y1 and y1<yb and ya<y2 and y2<yb)) ] for line in lines]
