@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+__author__ = "Matthew Ng"
+
+import serial
+import numpy as np
+import time
+import cv2
+import os
+from matplotlib import pyplot as plt
+from imutils.object_detection import non_max_suppression
+import imutils
+import csv
+
+def intersect(p1_si, p2_si):
+   if len(p1_si) != 2 and len(p2_si) != 2:
+      print("Incorrect slope intercept form")
+      return
+   b = p2_si[1] - p1_si[1]
+   s = p1_si[0] - p2_si[0]
+   x = b/s
+   y = p1_si[0]*x + p1_si[1]
+   return (x, y)
+
+def writeListToCSV(data, filename):
+   with open(filename, 'w') as myfile:
+      wr = csv.writer(myfile, quoting=csv.QUOTE_ALL)
+      wr.writerow([int(x) for x in data])
+
+def bottomHalfImage(image):
+   global half_height
+   cropped_im = image[half_height:height]
+   return cropped_im
+
+def topHalfImage(image):
+   global half_height
+   cropped_im = image[0:half_height]
+   return cropped_im
+
+def floorCalc(frame):
+   global slopeIntercept, position, inter
+
+   #intersection Threshold
+   interThresh = 4
+
+   half = bottomHalfImage(frame)
+   half_gray = cv2.cvtColor(half, cv2.COLOR_RGB2GRAY)
+   half_edge = cv2.Canny(half_gray, 50, 150)
+   half_line = cv2.HoughLinesP(half_edge, rho=1, theta=np.pi/180, threshold=50, minLineLength=50, maxLineGap=30)
+
+   if half_line is None:
+      return
+   for line in half_line:
+      for x1, y1, x2, y2 in line:
+         if x2-x1 == 0:
+            continue
+         slope = (y2-y1)/(x2-x1)
+         intercept = y1-x1*slope
+         slopeIntercept.append([slope,intercept])
+
+
+   slopeIntercept = [x for x in slopeIntercept if (abs(x[0] - (-x[1])/MovingAverage) < 0.5)] #eliminate lines that don't meet the VP
+   slopeIntercept = sorted(slopeIntercept)
+   siPos = [x for x in slopeIntercept if x[0] > 0]
+   siNeg = [x for x in slopeIntercept if x[0] < 0]
+
+   flatLines = [x for x in slopeIntercept if abs(x[0]) < 0.3]
+   #[cv2.line(frame, (0, int(x[1])+half_height), (1000, int(x[0]*1000 + x[1]+half_height)), (0,0,255), 2) for x in flatLines]
+   if len(flatLines) > interThresh:
+      if inter == True:
+         print("INTERSECTION? - Lots of Flats")
+      inter = True
+   else:
+      inter = False
+   [cv2.line(frame, (0, int(x[1])+half_height), (1000, int(x[0]*1000 + x[1]+half_height)), (0,0,255), 2) for x in slopeIntercept]
+
+   # Gets the two most likely ground lines and uses them to find position
+   slopeIntercept = []
+   if len(siPos) > 0:
+      x = min(range(len(siPos)), key=lambda i: abs(siPos[i][0] - 0.5))
+      slopeIntercept.append([siPos[x][0],siPos[x][1] + half_height])
+      position = position + 1 if position < 15 else 15
+   else:
+      position = position - 1 if position > 0 else 0
+
+   if len(siNeg) > 0:
+      y = min(range(len(siNeg)), key=lambda i: abs(siNeg[i][0] + 0.5))
+      slopeIntercept.append([siNeg[y][0],siNeg[y][1]+half_height])
+      position = position - 1 if position > 0 else 0
+   else:
+      position = position + 1 if position < 15 else 15
+
+   if len(siPos) > 0 and len(siNeg) > 0:
+      delta = int('0b1000', 2) - position
+      position += (1 if delta > 0 else -1)
+
+   if position == 15:   
+      pass
+      #print("Too close to Left")
+   elif position == 0:
+      pass
+      #print("Too close to Right")
+
+   # calculate floor based on ground lines
+   if len(slopeIntercept) == 2:
+      vrx = np.array([[MovingAverage, half_height], [0, slopeIntercept[1][1]], [width, width*slopeIntercept[0][0] + slopeIntercept[0][1]]], np.int32)
+      vrx = vrx.reshape((-1,1,2))
+      cv2.fillPoly(frame, [vrx], (0, 255, 255))
+
+   return slopeIntercept
+
+
+##############################################
+################## MAIN ######################
+##############################################
+csvlist = []
+timelist = []
+MA = [160, 160, 160, 160, 160]
+MovingAverage = 160
+
+# Arduino Drive Port Setup#
+adp = '/dev/ttyACM0'
+s = False #Variable for the Arduino
+try: 
+   ser = serial.Serial(adp)
+   time.sleep(3)
+   s = True
+except:
+   print("No Serial Connection")
+
+
+cap = cv2.VideoCapture('PersonData/mostlyme.avi')#EmptyData/emptyhallway.avi')
+#fourcc = cv2.VideoWriter_fourcc(*'XVID')
+#out = cv2.VideoWriter('output.avi', fourcc, 20.0, (320, 240))
+#hog oink
+hog = cv2.HOGDescriptor()
+hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+
+#to end the stream after # of frames
+counter = 2000
+
+#To determine which side the robot is hugging
+position = int('0b1000', 2)
+
+#For intersection detection
+inter = False
+
+start_time = time.time()
+while (cap.isOpened()):
+   #image testing
+   #frame = cv2.imread('hall4.jpg')
+   ret, frame = cap.read()
+   if frame is None:
+      break
+
+   frame = cv2.resize(frame, (320, 240))
+   #(rects, weights) = hog.detectMultiScale(frame, winStride=(8,8),padding=(16,16),scale=1.05)
+   #rects = np.array([[x,y,(x+w),(y+h)] for (x,y,w,h) in rects])
+   #pick = non_max_suppression(rects, probs=None, overlapThresh=0.65)
+   pick = []
+   height, width, channels = frame.shape
+   frame = cv2.GaussianBlur(frame, (3,3),0)
+   slopeIntercept = []
+   newIntersects = []
+   lineIntersects = []
+   
+   #Half height calculation
+   half_height = round(height/2)
+
+   floorCalc(frame)
+   
+   #our operations on the frame come here
+   gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+   edges = cv2.Canny(gray, 50, 150)
+   lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180, threshold=50, minLineLength=50, maxLineGap=30)
+
+   for xa,ya,xb,yb in pick:
+      lines = [[(x1,y1,x2,y2) for x1,y1,x2,y2 in line if not ((xa < x1 and x1 < xb and xa < x2 and x2 < xb)and(ya<y1 and y1<yb and ya<y2 and y2<yb)) ] for line in lines]
+
+   if lines is None:
+      continue
+   for line in lines:
+      for x1,y1,x2,y2 in line:
+         if x2-x1 == 0:
+            continue
+         slope = (y2-y1)/(x2-x1)
+         intercept = y1 - x1*slope
+         slopeIntercept.append([slope,intercept])
+         if slope > 9: # output verticals
+            pass
+            #cv2.line(frame, (x1,y1), (x2,y2), (0,255,0),2)
+
+   #align the horizon line
+   #slopeIntercept.append([0, height/2])
+   cv2.line(frame, (0, round(height/2)), (width, round(height/2)), (0, 0, 255), 2)
+
+   slopeIntercept = [x for x in slopeIntercept if (abs(x[0]) > 0.1 and abs(x[0]) < 9)] #eliminate lines close to zero and too strong
+   #[cv2.line(frame, (0, int(x[1])), (1000, int(x[0]*1000 + x[1])), (0,0,255), 2) for x in slopeIntercept]
+
+   #calculate intersects
+   for i, si1 in enumerate(slopeIntercept):
+      for si2 in slopeIntercept[i+1:]:
+         if abs(si1[0] - si2[0]) > 0.5:
+            lineIntersects.append(intersect(si1, si2))
+
+   #gets rid of intersects in the top 1/3 or bottom 1/3 of the image
+   lineIntersects = [li for li in lineIntersects if (li[1] > height/3 and li[1] < height*2/3)]
+
+   [cv2.circle(frame, (int(intersect[0]), int(intersect[1])), 10, (255, 0, 0), -1) for intersect in lineIntersects]
+
+   numIntersects = len(lineIntersects)
+   if numIntersects != 0:
+      sum_x = sum([x[0] for x in lineIntersects])
+      avg_x = int(sum_x/numIntersects)
+
+      color_x = avg_x if avg_x < width else width
+      color_x = color_x if color_x > 0 else 0
+
+      #print(int(255/width*color_x))
+      speed = chr(int(255/width*color_x))
+
+      color_x = 2*abs(width/2 - color_x)
+      #this is where the avg circle is drawn
+      cv2.circle(frame, (avg_x, round(height/2)), 10, (0, 255, 0), -1)
+
+      #update moving average
+      del MA[0]
+      MA.append(avg_x)      
+      MovingAverage = sum(MA)/len(MA)
+      csvlist.append(MovingAverage)
+
+      if s:
+         print(width)
+
+   for(x1,y1,x2,y2) in pick:
+      cv2.rectangle(frame, (x1,y1), (x2,y2), (255, 255, 0),thickness=2)
+
+   if cv2.waitKey(1) & 0xFF == ord('q'):
+      break
+
+   if counter <= 0:
+      break
+
+
+   #display the resulting frame
+   cv2.imshow('frame', frame)
+   #out.write(image)
+   counter -= 1
+
+   timelist.append(time.time() - start_time)
+
+
+print('{} FPS'.format(int((2000-counter)/(time.time() - start_time))))
+writeListToCSV(csvlist, "eric.csv")
+writeListToCSV(timelist, "timeric.csv")
+cap.release()
+#out.release()
+cv2.destroyAllWindows()
