@@ -108,6 +108,7 @@ def floorCalc(frame):
 
    return slopeIntercept
 
+clamp = lambda x, minn, maxx: max(min(maxx, x), minn)
 
 ##############################################
 ################## MAIN ######################
@@ -116,6 +117,12 @@ csvlist = []
 timelist = []
 MA = [160, 160, 160, 160, 160]
 MovingAverage = 160
+
+# For driving adjustments
+numwin = 5
+imBin = [0]*numwin # for tracking stability
+lAdj = 0
+rAdj = 0
 
 # Arduino Drive Port Setup#
 adp = '/dev/ttyACM0'
@@ -128,9 +135,9 @@ except:
    print("No Serial Connection")
 
 
-cap = cv2.VideoCapture('PersonData/mostlyme.avi')#EmptyData/emptyhallway.avi')
-#fourcc = cv2.VideoWriter_fourcc(*'XVID')
-#out = cv2.VideoWriter('output.avi', fourcc, 20.0, (320, 240))
+cap = cv2.VideoCapture('yavishtwalk.avi')#'empty_rotate.avi')
+fourcc = cv2.VideoWriter_fourcc(*'XVID')
+out = cv2.VideoWriter('output.avi', fourcc, 20.0, (320, 240))
 #hog oink
 hog = cv2.HOGDescriptor()
 hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
@@ -146,6 +153,7 @@ inter = False
 
 start_time = time.time()
 while (cap.isOpened()):
+   framelock_start = time.time()
    #image testing
    #frame = cv2.imread('hall4.jpg')
    ret, frame = cap.read()
@@ -153,10 +161,10 @@ while (cap.isOpened()):
       break
 
    frame = cv2.resize(frame, (320, 240))
-   #(rects, weights) = hog.detectMultiScale(frame, winStride=(8,8),padding=(16,16),scale=1.05)
-   #rects = np.array([[x,y,(x+w),(y+h)] for (x,y,w,h) in rects])
-   #pick = non_max_suppression(rects, probs=None, overlapThresh=0.65)
-   pick = []
+   (rects, weights) = hog.detectMultiScale(frame, winStride=(8,8),padding=(16,16),scale=1.05)
+   rects = np.array([[x,y,(x+w),(y+h)] for (x,y,w,h) in rects])
+   pick = non_max_suppression(rects, probs=None, overlapThresh=0.65)
+   #pick = []
    height, width, channels = frame.shape
    frame = cv2.GaussianBlur(frame, (3,3),0)
    slopeIntercept = []
@@ -228,8 +236,44 @@ while (cap.isOpened()):
       MovingAverage = sum(MA)/len(MA)
       csvlist.append(MovingAverage)
 
-      if s:
-         print(width)
+      if s:         
+         winsize = width/numwin
+         left = 8 + lAdj
+         right = 8 + rAdj
+         bothAdj = 0
+
+         thisBin = -1
+         for i in range(1,numwin+1):
+            if MovingAverage < i * winsize:
+               thisBin = i-1
+               break
+
+         if thisBin == -1:
+            print("WOAH NEGATIVE ERROR!!!")
+         else:
+            if sum(imBin) > 30:
+               diff = sum(imBin[0:numwin//2]) - sum(imBin[numwin//2+1:numwin])
+               if abs(diff) > 2:
+                  lAdj -= diff/abs(diff)
+                  rAdj += diff/abs(diff)
+                  lAdj = clamp(lAdj, -1, 1)
+                  rAdj = clamp(rAdj, -1, 1)
+               else:
+                  lAdj = 0
+                  rAdj = 0
+               imBin = [0]*numwin
+               
+            imBin[thisBin] += 1            
+            bothAdj = thisBin - numwin//2
+            left += bothAdj
+            right -= bothAdj
+
+            left = int(clamp(left, 0, 15))
+            right = int(clamp(right, 0, 15))
+               
+            print("left {}, right {}".format(left, right))
+            ser.write(chr((left << 4 | right)).encode())
+
 
    for(x1,y1,x2,y2) in pick:
       cv2.rectangle(frame, (x1,y1), (x2,y2), (255, 255, 0),thickness=2)
@@ -240,18 +284,23 @@ while (cap.isOpened()):
    if counter <= 0:
       break
 
-
    #display the resulting frame
    cv2.imshow('frame', frame)
-   #out.write(image)
+   out.write(frame)
    counter -= 1
 
-   timelist.append(time.time() - start_time)
+   #timelist.append(time.time() - start_time)
+   #delta_time = time.time() - framelock_start
+   #time.sleep(abs(0.0416-delta_time))
 
+
+if s:
+   ser.write(chr(0).encode())
+   ser.close()
 
 print('{} FPS'.format(int((2000-counter)/(time.time() - start_time))))
 writeListToCSV(csvlist, "eric.csv")
-writeListToCSV(timelist, "timeric.csv")
+#writeListToCSV(timelist, "timeric.csv")
+out.release()
 cap.release()
-#out.release()
 cv2.destroyAllWindows()

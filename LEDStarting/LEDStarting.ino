@@ -38,8 +38,10 @@ void loop() {
       stopIfFault();
     }
     else{
-      md.setM1Speed(map(immap, 0, 256, 100, 256));
-      md.setM2Speed(map(immap, 0, 256, 240, 100));      
+      leftMotor = (immap & 0xF0)>>4;
+      rightMotor = immap & 0x0F;
+      md.setM1Speed(map(leftMotor, 0, 15, 50, 150));
+      md.setM2Speed(map(rightMotor, 0, 15, 50, 150));      
     }
   }
 }
