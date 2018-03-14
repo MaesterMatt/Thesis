@@ -11,6 +11,10 @@ from imutils.object_detection import non_max_suppression
 import imutils
 import csv
 
+HOG = False#True
+HOGOPTICAL = True#False
+RECORD = False
+
 def intersect(p1_si, p2_si):
    if len(p1_si) != 2 and len(p2_si) != 2:
       print("Incorrect slope intercept form")
@@ -113,6 +117,10 @@ clamp = lambda x, minn, maxx: max(min(maxx, x), minn)
 ##############################################
 ################## MAIN ######################
 ##############################################
+cap = cv2.VideoCapture('yavishtwalk.avi')#'empty_rotate.avi')
+height = 240
+width = 320
+
 csvlist = []
 timelist = []
 MA = [160, 160, 160, 160, 160]
@@ -125,23 +133,28 @@ lAdj = 0
 rAdj = 0
 
 # Arduino Drive Port Setup#
-adp = '/dev/ttyACM0'
-s = False #Variable for the Arduino
 try: 
+   adp = '/dev/ttyACM0'
+   s = False #Variable for the Arduino
    ser = serial.Serial(adp)
    time.sleep(3)
    s = True
 except:
    print("No Serial Connection")
 
+if RECORD:
+   fourcc = cv2.VideoWriter_fourcc(*'XVID')
+   out = cv2.VideoWriter('output.avi', fourcc, 20.0, (width, height))
 
-cap = cv2.VideoCapture('yavishtwalk.avi')#'empty_rotate.avi')
-fourcc = cv2.VideoWriter_fourcc(*'XVID')
-out = cv2.VideoWriter('output.avi', fourcc, 20.0, (320, 240))
-#hog oink
-hog = cv2.HOGDescriptor()
-hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
-
+if HOG or HOGOPTICAL:
+   hog = cv2.HOGDescriptor()
+   hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+   if HOGOPTICAL:
+      ret, frame1 = cap.read()
+      frame1 = cv2.resize(frame1,(width,height))
+      prvs = cv2.cvtColor(frame1,cv2.COLOR_BGR2GRAY)
+      ROI = []
+      
 #to end the stream after # of frames
 counter = 2000
 
@@ -152,20 +165,50 @@ position = int('0b1000', 2)
 inter = False
 
 start_time = time.time()
+###########################################################
+#######################LOOP################################
+###########################################################
 while (cap.isOpened()):
    framelock_start = time.time()
-   #image testing
-   #frame = cv2.imread('hall4.jpg')
    ret, frame = cap.read()
    if frame is None:
       break
+   frame = cv2.resize(frame, (width, height))
 
-   frame = cv2.resize(frame, (320, 240))
-   (rects, weights) = hog.detectMultiScale(frame, winStride=(8,8),padding=(16,16),scale=1.05)
-   rects = np.array([[x,y,(x+w),(y+h)] for (x,y,w,h) in rects])
-   pick = non_max_suppression(rects, probs=None, overlapThresh=0.65)
-   #pick = []
-   height, width, channels = frame.shape
+   if HOG or HOGOPTICAL:
+      (rect, weight) = hog.detectMultiScale(frame, winStride=(8,8),padding=(16,16),scale=1.12)
+      try:
+         rect = rect.tolist()
+      except:
+         pass
+      try:
+         weight = weight.tolist()
+      except:
+         pass
+      if HOGOPTICAL:
+         nxt = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+         flow = cv2.calcOpticalFlowFarneback(prvs, nxt, None, 0.5, 10, 20, 3, 5, 1.2, 2) 
+         x_flo = flow[...,0]
+         y_flo = flow[...,1]
+         for i in range(0, len(ROI)):
+            r,w = hog.detectMultiScale(frame[ROI[i][1]:ROI[i][3], ROI[i][0]:ROI[i][2]], winStride=(4,4), padding=(8,8), scale=1.12)
+            if(len(r) > 0):
+               if len(rect) > 0:
+                  [rect.append([x+ROI[i][0], y+ROI[i][1], w, h]) for (x,y,w,h) in r]
+                  w = [x*2 for x in w]
+                  [weight.append(x.tolist()) for x in w]
+                  print('xx-{}_{}'.format(rect, weight))
+               else:
+                  rect = [[x+ROI[i][0], y+ROI[i][1], w, h] for (x,y,w,h) in r]
+                  weight = [x*2 for x in w]
+         ROI = []
+      rects = []
+      for i, (x,y,w,h) in enumerate(rect):
+         if weight[i][0] > 1:
+            rects.append(rect[i])
+
+      rects = np.array([[x,y,(x+w),(y+h)] for (x,y,w,h) in rects])
+      pick = non_max_suppression(rects, probs=None, overlapThresh=0.65)
    frame = cv2.GaussianBlur(frame, (3,3),0)
    slopeIntercept = []
    newIntersects = []
@@ -181,8 +224,21 @@ while (cap.isOpened()):
    edges = cv2.Canny(gray, 50, 150)
    lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180, threshold=50, minLineLength=50, maxLineGap=30)
 
-   for xa,ya,xb,yb in pick:
-      lines = [[(x1,y1,x2,y2) for x1,y1,x2,y2 in line if not ((xa < x1 and x1 < xb and xa < x2 and x2 < xb)and(ya<y1 and y1<yb and ya<y2 and y2<yb)) ] for line in lines]
+   if HOG or HOGOPTICAL:
+      for xa,ya,xb,yb in pick:
+         lines = [[(x1,y1,x2,y2) for x1,y1,x2,y2 in line if not ((xa < x1 and x1 < xb and xa < x2 and x2 < xb)and(ya<y1 and y1<yb and ya<y2 and y2<yb)) ] for line in lines]
+         if HOGOPTICAL:
+            xSubFlo = x_flo[ya:yb,xa:xb]
+            ySubFlo = y_flo[ya:yb,xa:xb]
+            avgX = sum(sum(xSubFlo))/abs((yb-ya)*(xb-xa))
+            avgY = sum(sum(ySubFlo))/abs((yb-ya)*(xb-xa))
+
+            xA = int(clamp(min(xa+avgX,xa), 0, width))
+            xB = int(clamp(max(xb+avgX,xb), 0, width))
+            yA = int(clamp(min(ya+avgY,ya), 0, height))
+            yB = int(clamp(max(yb+avgY,yb), 0, height))
+
+            ROI.append((xA, yA, xB, yB))
 
    if lines is None:
       continue
@@ -193,12 +249,9 @@ while (cap.isOpened()):
          slope = (y2-y1)/(x2-x1)
          intercept = y1 - x1*slope
          slopeIntercept.append([slope,intercept])
-         if slope > 9: # output verticals
-            pass
-            #cv2.line(frame, (x1,y1), (x2,y2), (0,255,0),2)
 
-   #align the horizon line
-   #slopeIntercept.append([0, height/2])
+   #Place the horizon line to assist with stability
+   slopeIntercept.append([0, height/2])
    cv2.line(frame, (0, round(height/2)), (width, round(height/2)), (0, 0, 255), 2)
 
    slopeIntercept = [x for x in slopeIntercept if (abs(x[0]) > 0.1 and abs(x[0]) < 9)] #eliminate lines close to zero and too strong
@@ -275,8 +328,9 @@ while (cap.isOpened()):
             ser.write(chr((left << 4 | right)).encode())
 
 
-   for(x1,y1,x2,y2) in pick:
-      cv2.rectangle(frame, (x1,y1), (x2,y2), (255, 255, 0),thickness=2)
+   if HOG or HOGOPTICAL:
+      for(x1,y1,x2,y2) in pick:
+         cv2.rectangle(frame, (x1,y1), (x2,y2), (255, 255, 0),thickness=2)
 
    if cv2.waitKey(1) & 0xFF == ord('q'):
       break
@@ -286,21 +340,22 @@ while (cap.isOpened()):
 
    #display the resulting frame
    cv2.imshow('frame', frame)
-   out.write(frame)
    counter -= 1
+   if RECORD:
+      out.write(frame)
 
    #timelist.append(time.time() - start_time)
    #delta_time = time.time() - framelock_start
    #time.sleep(abs(0.0416-delta_time))
 
-
 if s:
    ser.write(chr(0).encode())
    ser.close()
 
+if RECORD:
+   out.release()
+
 print('{} FPS'.format(int((2000-counter)/(time.time() - start_time))))
 writeListToCSV(csvlist, "eric.csv")
-#writeListToCSV(timelist, "timeric.csv")
-out.release()
 cap.release()
 cv2.destroyAllWindows()

@@ -30,7 +30,7 @@ while (cap.isOpened()):
    ret, image = cap.read()
    image = cv2.resize(image, (320, 240))
    nxt = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-   flow = cv2.calcOpticalFlowFarneback(prvs, nxt, None, 0.5, 1, 20, 3, 5, 1.2, 2)
+   flow = cv2.calcOpticalFlowFarneback(prvs, nxt, None, 0.5, 10, 20, 3, 5, 1.2, 2)
    x_flo = flow[...,0]
    y_flo = flow[...,1]
    orig = image.copy()
