@@ -10,10 +10,15 @@ from matplotlib import pyplot as plt
 from imutils.object_detection import non_max_suppression
 import imutils
 import csv
+import math
+import statistics
 
-HOG = False#True
-HOGOPTICAL = True#False
+HOG = True
+HOGOPTICAL = False
 RECORD = False
+
+def intersectWeight(mean, var, val):
+   return (1/(math.sqrt(2*math.pi*var)))*math.pow(math.e, -math.pow(val-mean, 2)/(2*var))
 
 def intersect(p1_si, p2_si):
    if len(p1_si) != 2 and len(p2_si) != 2:
@@ -99,17 +104,15 @@ def floorCalc(frame):
 
    if position == 15:   
       pass
-      #print("Too close to Left")
    elif position == 0:
       pass
-      #print("Too close to Right")
-
    # calculate floor based on ground lines
+   '''
    if len(slopeIntercept) == 2:
       vrx = np.array([[MovingAverage, half_height], [0, slopeIntercept[1][1]], [width, width*slopeIntercept[0][0] + slopeIntercept[0][1]]], np.int32)
       vrx = vrx.reshape((-1,1,2))
       cv2.fillPoly(frame, [vrx], (0, 255, 255))
-
+   '''
    return slopeIntercept
 
 clamp = lambda x, minn, maxx: max(min(maxx, x), minn)
@@ -117,17 +120,17 @@ clamp = lambda x, minn, maxx: max(min(maxx, x), minn)
 ##############################################
 ################## MAIN ######################
 ##############################################
-cap = cv2.VideoCapture('yavishtwalk.avi')#'empty_rotate.avi')
+cap = cv2.VideoCapture('chairdrive5.avi')#'yavishtwalk.avi')#'empty_rotate.avi')
 height = 240
 width = 320
 
 csvlist = []
 timelist = []
-MA = [160, 160, 160, 160, 160]
+MA = [160]*5
 MovingAverage = 160
 
 # For driving adjustments
-numwin = 5
+numwin = 7
 imBin = [0]*numwin # for tracking stability
 lAdj = 0
 rAdj = 0
@@ -135,11 +138,11 @@ rAdj = 0
 # Arduino Drive Port Setup#
 try: 
    adp = '/dev/ttyACM0'
-   s = False #Variable for the Arduino
    ser = serial.Serial(adp)
    time.sleep(3)
    s = True
 except:
+   s = False
    print("No Serial Connection")
 
 if RECORD:
@@ -176,7 +179,7 @@ while (cap.isOpened()):
    frame = cv2.resize(frame, (width, height))
 
    if HOG or HOGOPTICAL:
-      (rect, weight) = hog.detectMultiScale(frame, winStride=(8,8),padding=(16,16),scale=1.12)
+      (rect, weight) = hog.detectMultiScale(frame, winStride=(4,4),padding=(8,8),scale=1.05)
       try:
          rect = rect.tolist()
       except:
@@ -191,7 +194,7 @@ while (cap.isOpened()):
          x_flo = flow[...,0]
          y_flo = flow[...,1]
          for i in range(0, len(ROI)):
-            r,w = hog.detectMultiScale(frame[ROI[i][1]:ROI[i][3], ROI[i][0]:ROI[i][2]], winStride=(4,4), padding=(8,8), scale=1.12)
+            r,w = hog.detectMultiScale(frame[ROI[i][1]:ROI[i][3], ROI[i][0]:ROI[i][2]], winStride=(4,4), padding=(8,8), scale=1.03)
             if(len(r) > 0):
                if len(rect) > 0:
                   [rect.append([x+ROI[i][0], y+ROI[i][1], w, h]) for (x,y,w,h) in r]
@@ -217,7 +220,9 @@ while (cap.isOpened()):
    #Half height calculation
    half_height = round(height/2)
 
-   floorCalc(frame)
+   slopeIntercept = floorCalc(frame)
+   if slopeIntercept is None:
+      slopeIntercept = []
    
    #our operations on the frame come here
    gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
@@ -264,22 +269,17 @@ while (cap.isOpened()):
             lineIntersects.append(intersect(si1, si2))
 
    #gets rid of intersects in the top 1/3 or bottom 1/3 of the image
-   lineIntersects = [li for li in lineIntersects if (li[1] > height/3 and li[1] < height*2/3)]
+   #lineIntersects = [li for li in lineIntersects if (li[1] > height/3 and li[1] < height*2/3)]
 
    [cv2.circle(frame, (int(intersect[0]), int(intersect[1])), 10, (255, 0, 0), -1) for intersect in lineIntersects]
 
    numIntersects = len(lineIntersects)
    if numIntersects != 0:
-      sum_x = sum([x[0] for x in lineIntersects])
-      avg_x = int(sum_x/numIntersects)
+      sum_x = sum([(x[0]-MovingAverage)*intersectWeight(MovingAverage, width/2, x[0]) for x in lineIntersects])
+      avg_x = int(MovingAverage + sum_x)
+      #sum_x = sum([x[0] for x in lineIntersects])
+      #avg_x = int(sum_x/numIntersects)
 
-      color_x = avg_x if avg_x < width else width
-      color_x = color_x if color_x > 0 else 0
-
-      #print(int(255/width*color_x))
-      speed = chr(int(255/width*color_x))
-
-      color_x = 2*abs(width/2 - color_x)
       #this is where the avg circle is drawn
       cv2.circle(frame, (avg_x, round(height/2)), 10, (0, 255, 0), -1)
 
@@ -356,6 +356,7 @@ if RECORD:
    out.release()
 
 print('{} FPS'.format(int((2000-counter)/(time.time() - start_time))))
-writeListToCSV(csvlist, "eric.csv")
+#writeListToCSV(csvlist, "eric.csv")
+print(statistics.variance(csvlist))
 cap.release()
 cv2.destroyAllWindows()
