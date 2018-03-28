@@ -12,10 +12,14 @@ import imutils
 import csv
 import math
 import statistics
+from skimage import measure
 
-HOG = True
+HOG = False
 HOGOPTICAL = False
 RECORD = False
+filename = 'chairdrive0.'
+height = 240
+width = 320
 
 def intersectWeight(mean, var, val):
    return (1/(math.sqrt(2*math.pi*var)))*math.pow(math.e, -math.pow(val-mean, 2)/(2*var))
@@ -45,6 +49,56 @@ def topHalfImage(image):
    cropped_im = image[0:half_height]
    return cropped_im
 
+kmeanC = width//2
+def floorSeg(fin):
+   global kmeanC
+   fin = cv2.medianBlur(fin, 21)
+   bh=bottomHalfImage(fin)
+   Z = bh.reshape((bh.shape[0]*bh.shape[1]))
+
+   Z = np.float32(Z)
+
+   criteria = (cv2.TERM_CRITERIA_MAX_ITER + cv2.TERM_CRITERIA_EPS, 10, 1.0)
+   K = 5
+   ret, label, center = cv2.kmeans(Z,K, None, criteria, 10,cv2.KMEANS_RANDOM_CENTERS)
+
+
+   tempLabel = label.reshape(height//2, width, 1)
+   #print(tempLabel[height//2-1, width//2])
+   B = Z[label.ravel()==1]
+   center = np.uint8(center)
+   res = center[label.flatten()]
+   res = np.zeros((len(res), 1))
+   res[label.ravel()==tempLabel[height//2-1, kmeanC]] = 1
+   res2 = res.reshape(bh.shape)
+   thresh = cv2.threshold(res2, 0.5,255,cv2.THRESH_BINARY)[1]
+
+   labels = measure.label(thresh, neighbors=8, background=0)
+   mask = np.zeros(thresh.shape,dtype="uint8")
+
+   largestMask = None
+   maxNum = -1
+   for lab in np.unique(labels):
+      if lab==0:
+         continue
+      labelMask = np.zeros(thresh.shape, dtype="uint8")
+      labelMask[labels == lab] = 255
+      numPixels = cv2.countNonZero(labelMask)
+      if numPixels > maxNum:
+         maxNum = numPixels
+         largestMask = labelMask
+   if largestMask is not None:
+      cnts = cv2.findContours(largestMask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+      cnts = cnts[0] if imutils.is_cv2() else cnts[1]
+
+      peak = (kmeanC, height)
+      for i in cnts[0]:
+         if i[0][1] < peak[1]:
+            peak = (i[0][0], i[0][1])
+      kmeanC = peak[0]
+      
+      #cv2.imshow('res2',largestMask)
+
 def floorCalc(frame):
    global slopeIntercept, position, inter
 
@@ -73,7 +127,6 @@ def floorCalc(frame):
    siNeg = [x for x in slopeIntercept if x[0] < 0]
 
    flatLines = [x for x in slopeIntercept if abs(x[0]) < 0.3]
-   #[cv2.line(frame, (0, int(x[1])+half_height), (1000, int(x[0]*1000 + x[1]+half_height)), (0,0,255), 2) for x in flatLines]
    if len(flatLines) > interThresh:
       if inter == True:
          print("INTERSECTION? - Lots of Flats")
@@ -120,9 +173,7 @@ clamp = lambda x, minn, maxx: max(min(maxx, x), minn)
 ##############################################
 ################## MAIN ######################
 ##############################################
-cap = cv2.VideoCapture('chairdrive5.avi')#'yavishtwalk.avi')#'empty_rotate.avi')
-height = 240
-width = 320
+cap = cv2.VideoCapture(filename + 'avi')#'yavishtwalk.avi')#'empty_rotate.avi')
 
 csvlist = []
 timelist = []
@@ -139,6 +190,7 @@ rAdj = 0
 try: 
    adp = '/dev/ttyACM0'
    ser = serial.Serial(adp)
+   ser.setBaudrate(115200)
    time.sleep(3)
    s = True
 except:
@@ -149,15 +201,14 @@ if RECORD:
    fourcc = cv2.VideoWriter_fourcc(*'XVID')
    out = cv2.VideoWriter('output.avi', fourcc, 20.0, (width, height))
 
+ret, frame1 = cap.read()
 if HOG or HOGOPTICAL:
    hog = cv2.HOGDescriptor()
    hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
    if HOGOPTICAL:
-      ret, frame1 = cap.read()
       frame1 = cv2.resize(frame1,(width,height))
       prvs = cv2.cvtColor(frame1,cv2.COLOR_BGR2GRAY)
       ROI = []
-      
 #to end the stream after # of frames
 counter = 2000
 
@@ -179,7 +230,7 @@ while (cap.isOpened()):
    frame = cv2.resize(frame, (width, height))
 
    if HOG or HOGOPTICAL:
-      (rect, weight) = hog.detectMultiScale(frame, winStride=(4,4),padding=(8,8),scale=1.05)
+      (rect, weight) = hog.detectMultiScale(frame, winStride=(8,8),padding=(16,16),scale=1.05)
       try:
          rect = rect.tolist()
       except:
@@ -194,13 +245,13 @@ while (cap.isOpened()):
          x_flo = flow[...,0]
          y_flo = flow[...,1]
          for i in range(0, len(ROI)):
-            r,w = hog.detectMultiScale(frame[ROI[i][1]:ROI[i][3], ROI[i][0]:ROI[i][2]], winStride=(4,4), padding=(8,8), scale=1.03)
+            r,w = hog.detectMultiScale(frame[ROI[i][1]:ROI[i][3], ROI[i][0]:ROI[i][2]], winStride=(8,8), padding=(16,16), scale=1.05)
+            
             if(len(r) > 0):
                if len(rect) > 0:
                   [rect.append([x+ROI[i][0], y+ROI[i][1], w, h]) for (x,y,w,h) in r]
                   w = [x*2 for x in w]
                   [weight.append(x.tolist()) for x in w]
-                  print('xx-{}_{}'.format(rect, weight))
                else:
                   rect = [[x+ROI[i][0], y+ROI[i][1], w, h] for (x,y,w,h) in r]
                   weight = [x*2 for x in w]
@@ -212,7 +263,6 @@ while (cap.isOpened()):
 
       rects = np.array([[x,y,(x+w),(y+h)] for (x,y,w,h) in rects])
       pick = non_max_suppression(rects, probs=None, overlapThresh=0.65)
-   frame = cv2.GaussianBlur(frame, (3,3),0)
    slopeIntercept = []
    newIntersects = []
    lineIntersects = []
@@ -226,12 +276,28 @@ while (cap.isOpened()):
    
    #our operations on the frame come here
    gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-   edges = cv2.Canny(gray, 50, 150)
+   blurgray = cv2.medianBlur(gray, 3)
+   high_thresh, thresh_im = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+   low_thresh = 0.5*high_thresh
+   edges = cv2.Canny(gray, low_thresh, high_thresh)
    lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180, threshold=50, minLineLength=50, maxLineGap=30)
+   if lines is None:
+      continue
+   templin = []
+   [[templin.append([x1,y1,x2,y2]) for x1,y1,x2,y2 in line] for line in lines]
+   lines = templin
 
    if HOG or HOGOPTICAL:
       for xa,ya,xb,yb in pick:
-         lines = [[(x1,y1,x2,y2) for x1,y1,x2,y2 in line if not ((xa < x1 and x1 < xb and xa < x2 and x2 < xb)and(ya<y1 and y1<yb and ya<y2 and y2<yb)) ] for line in lines]
+         olen = len(lines)
+         newLin = []
+         for x1,y1,x2,y2 in lines:
+            if not ((xa < x1 and x1 < xb) and (ya < y1 and y1 < yb)) or not ((xa < x2 and x2 < xb) and (ya < y2 and y2 < yb)):
+               newLin.append([x1,y1,x2,y2])
+         if len(newLin) != olen:
+            print("woo it's differnet")
+
+         lines = newLin
          if HOGOPTICAL:
             xSubFlo = x_flo[ya:yb,xa:xb]
             ySubFlo = y_flo[ya:yb,xa:xb]
@@ -244,16 +310,12 @@ while (cap.isOpened()):
             yB = int(clamp(max(yb+avgY,yb), 0, height))
 
             ROI.append((xA, yA, xB, yB))
-
-   if lines is None:
-      continue
-   for line in lines:
-      for x1,y1,x2,y2 in line:
-         if x2-x1 == 0:
-            continue
-         slope = (y2-y1)/(x2-x1)
-         intercept = y1 - x1*slope
-         slopeIntercept.append([slope,intercept])
+   for x1,y1,x2,y2 in lines:
+      if x2-x1 == 0:
+         continue
+      slope = (y2-y1)/(x2-x1)
+      intercept = y1 - x1*slope
+      slopeIntercept.append([slope,intercept])
 
    #Place the horizon line to assist with stability
    slopeIntercept.append([0, height/2])
@@ -273,10 +335,12 @@ while (cap.isOpened()):
 
    [cv2.circle(frame, (int(intersect[0]), int(intersect[1])), 10, (255, 0, 0), -1) for intersect in lineIntersects]
 
+   floorSeg(blurgray)
+
    numIntersects = len(lineIntersects)
    if numIntersects != 0:
-      sum_x = sum([(x[0]-MovingAverage)*intersectWeight(MovingAverage, width/2, x[0]) for x in lineIntersects])
-      avg_x = int(MovingAverage + sum_x)
+      sum_x = sum([(x[0]-MovingAverage)*intersectWeight(MovingAverage, width, x[0]) for x in lineIntersects])
+      avg_x = (int(MovingAverage + sum_x) if abs(kmeanC-MovingAverage) > 25 else kmeanC)
       #sum_x = sum([x[0] for x in lineIntersects])
       #avg_x = int(sum_x/numIntersects)
 
@@ -288,6 +352,7 @@ while (cap.isOpened()):
       MA.append(avg_x)      
       MovingAverage = sum(MA)/len(MA)
       csvlist.append(MovingAverage)
+      kmeanC = avg_x
 
       if s:         
          winsize = width/numwin
@@ -326,6 +391,10 @@ while (cap.isOpened()):
                
             print("left {}, right {}".format(left, right))
             ser.write(chr((left << 4 | right)).encode())
+   else:
+      csvlist.append(MovingAverage)
+      cv2.circle(frame, (int(MovingAverage), round(height/2)), 10, (0, 0, 255), -1)
+      
 
 
    if HOG or HOGOPTICAL:
@@ -356,7 +425,12 @@ if RECORD:
    out.release()
 
 print('{} FPS'.format(int((2000-counter)/(time.time() - start_time))))
-#writeListToCSV(csvlist, "eric.csv")
-print(statistics.variance(csvlist))
+#print(statistics.variance(csvlist))
+with open(filename + 'csv', 'r') as f:
+   reader = csv.reader(f)
+   lines = list(reader)
+
+diff = [abs(float(x)/2 - float(y)) for x,y in zip(lines[0], csvlist)]
+print(sum(diff)/len(diff))
 cap.release()
 cv2.destroyAllWindows()
