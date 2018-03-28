@@ -14,10 +14,11 @@ import math
 import statistics
 from skimage import measure
 
-HOG = False
+HOG = True
 HOGOPTICAL = False
+KM=False
 RECORD = False
-filename = 'chairdrive0.'
+filename = 'chairdrive3.'
 height = 240
 width = 320
 
@@ -99,8 +100,10 @@ def floorSeg(fin):
       
       #cv2.imshow('res2',largestMask)
 
+left = (-0.5, 0)
+right = (0.5, 0)
 def floorCalc(frame):
-   global slopeIntercept, position, inter
+   global slopeIntercept, position, inter, left, right
 
    #intersection Threshold
    interThresh = 4
@@ -114,14 +117,15 @@ def floorCalc(frame):
       return
    for line in half_line:
       for x1, y1, x2, y2 in line:
-         if x2-x1 == 0:
+         if x2-x1 == 0 or y2-y1 == 0:
             continue
          slope = (y2-y1)/(x2-x1)
          intercept = y1-x1*slope
          slopeIntercept.append([slope,intercept])
 
 
-   slopeIntercept = [x for x in slopeIntercept if (abs(x[0] - (-x[1])/MovingAverage) < 0.5)] #eliminate lines that don't meet the VP
+   #[print(abs((-x[1])/x[0]-MovingAverage)) for x in slopeIntercept]
+   slopeIntercept = [x for x in slopeIntercept if (abs(-x[1]/x[0]-MovingAverage)  < 100)] #eliminate lines that don't meet the VP
    slopeIntercept = sorted(slopeIntercept)
    siPos = [x for x in slopeIntercept if x[0] > 0]
    siNeg = [x for x in slopeIntercept if x[0] < 0]
@@ -133,22 +137,32 @@ def floorCalc(frame):
       inter = True
    else:
       inter = False
-   [cv2.line(frame, (0, int(x[1])+half_height), (1000, int(x[0]*1000 + x[1]+half_height)), (0,0,255), 2) for x in slopeIntercept]
 
    # Gets the two most likely ground lines and uses them to find position
    slopeIntercept = []
    if len(siPos) > 0:
-      x = min(range(len(siPos)), key=lambda i: abs(siPos[i][0] - 0.5))
-      slopeIntercept.append([siPos[x][0],siPos[x][1] + half_height])
+      x = min(range(len(siPos)), key=lambda i: abs(siPos[i][0] - right[0]))
+      if abs(siPos[x][0]-right[0]) < 0.3:
+         slopeIntercept.append([siPos[x][0],siPos[x][1] + half_height])
+         right = (siPos[x][0],siPos[x][1] + half_height)
+      else:
+         slopeIntercept.append([right[0],right[1]])
       position = position + 1 if position < 15 else 15
    else:
+      slopeIntercept.append([right[0],right[1]])
       position = position - 1 if position > 0 else 0
 
    if len(siNeg) > 0:
-      y = min(range(len(siNeg)), key=lambda i: abs(siNeg[i][0] + 0.5))
-      slopeIntercept.append([siNeg[y][0],siNeg[y][1]+half_height])
+      y = min(range(len(siNeg)), key=lambda i: abs(siNeg[i][0] - left[0]))
+      if abs(siNeg[y][0]-left[0]) < 0.3:
+         slopeIntercept.append([siNeg[y][0],siNeg[y][1]+half_height])
+         left = (siNeg[y][0],siNeg[y][1]+half_height)
+         #print(left)
+      else:
+         slopeIntercept.append([left[0],left[1]])
       position = position - 1 if position > 0 else 0
    else:
+      slopeIntercept.append([left[0],left[1]])
       position = position + 1 if position < 15 else 15
 
    if len(siPos) > 0 and len(siNeg) > 0:
@@ -160,6 +174,7 @@ def floorCalc(frame):
    elif position == 0:
       pass
    # calculate floor based on ground lines
+   [cv2.line(frame, (0, int(x[1])), (1000, int(x[0]*1000 + x[1])), (255,0,255), 2) for x in slopeIntercept]
    '''
    if len(slopeIntercept) == 2:
       vrx = np.array([[MovingAverage, half_height], [0, slopeIntercept[1][1]], [width, width*slopeIntercept[0][0] + slopeIntercept[0][1]]], np.int32)
@@ -289,13 +304,10 @@ while (cap.isOpened()):
 
    if HOG or HOGOPTICAL:
       for xa,ya,xb,yb in pick:
-         olen = len(lines)
          newLin = []
          for x1,y1,x2,y2 in lines:
             if not ((xa < x1 and x1 < xb) and (ya < y1 and y1 < yb)) or not ((xa < x2 and x2 < xb) and (ya < y2 and y2 < yb)):
                newLin.append([x1,y1,x2,y2])
-         if len(newLin) != olen:
-            print("woo it's differnet")
 
          lines = newLin
          if HOGOPTICAL:
@@ -335,17 +347,25 @@ while (cap.isOpened()):
 
    [cv2.circle(frame, (int(intersect[0]), int(intersect[1])), 10, (255, 0, 0), -1) for intersect in lineIntersects]
 
-   floorSeg(blurgray)
+   if KM:
+      floorSeg(blurgray)
 
    numIntersects = len(lineIntersects)
+   color = (0,255,0)
    if numIntersects != 0:
       sum_x = sum([(x[0]-MovingAverage)*intersectWeight(MovingAverage, width, x[0]) for x in lineIntersects])
-      avg_x = (int(MovingAverage + sum_x) if abs(kmeanC-MovingAverage) > 25 else kmeanC)
+      if KM:
+         if abs(kmeanC-MovingAverage) > 12:
+            #print("wumbo")
+            color = (0,255,255)
+         avg_x = (int(MovingAverage + sum_x) if abs(kmeanC-MovingAverage) > 12 else kmeanC)
+      else:
+         avg_x = int(MovingAverage + sum_x)
       #sum_x = sum([x[0] for x in lineIntersects])
       #avg_x = int(sum_x/numIntersects)
 
       #this is where the avg circle is drawn
-      cv2.circle(frame, (avg_x, round(height/2)), 10, (0, 255, 0), -1)
+      cv2.circle(frame, (avg_x, round(height/2)), 10, color, -1)
 
       #update moving average
       del MA[0]
@@ -425,12 +445,13 @@ if RECORD:
    out.release()
 
 print('{} FPS'.format(int((2000-counter)/(time.time() - start_time))))
-#print(statistics.variance(csvlist))
 with open(filename + 'csv', 'r') as f:
    reader = csv.reader(f)
    lines = list(reader)
 
 diff = [abs(float(x)/2 - float(y)) for x,y in zip(lines[0], csvlist)]
 print(sum(diff)/len(diff))
+print(statistics.variance(csvlist))
+print(statistics.variance([float(x) for x in lines[0]]))
 cap.release()
 cv2.destroyAllWindows()
