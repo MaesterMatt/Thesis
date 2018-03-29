@@ -14,11 +14,11 @@ import math
 import statistics
 from skimage import measure
 
-HOG = True
+HOG = False
 HOGOPTICAL = False
-KM=False
+KM=True
 RECORD = False
-filename = 'chairdrive3.'
+filename = 'empty_rotate.'
 height = 240
 width = 320
 
@@ -101,9 +101,9 @@ def floorSeg(fin):
       #cv2.imshow('res2',largestMask)
 
 left = (-0.5, 0)
-right = (0.5, 0)
+right = (0.5, width)
 def floorCalc(frame):
-   global slopeIntercept, position, inter, left, right
+   global slopeIntercept, inter, left, right
 
    #intersection Threshold
    interThresh = 4
@@ -140,47 +140,36 @@ def floorCalc(frame):
 
    # Gets the two most likely ground lines and uses them to find position
    slopeIntercept = []
+   rBoo = False
    if len(siPos) > 0:
       x = min(range(len(siPos)), key=lambda i: abs(siPos[i][0] - right[0]))
       if abs(siPos[x][0]-right[0]) < 0.3:
          slopeIntercept.append([siPos[x][0],siPos[x][1] + half_height])
          right = (siPos[x][0],siPos[x][1] + half_height)
+         rBoo = True
       else:
          slopeIntercept.append([right[0],right[1]])
-      position = position + 1 if position < 15 else 15
    else:
       slopeIntercept.append([right[0],right[1]])
-      position = position - 1 if position > 0 else 0
 
+   lBoo = False
    if len(siNeg) > 0:
       y = min(range(len(siNeg)), key=lambda i: abs(siNeg[i][0] - left[0]))
       if abs(siNeg[y][0]-left[0]) < 0.3:
          slopeIntercept.append([siNeg[y][0],siNeg[y][1]+half_height])
          left = (siNeg[y][0],siNeg[y][1]+half_height)
-         #print(left)
+         lBoo = True
       else:
          slopeIntercept.append([left[0],left[1]])
-      position = position - 1 if position > 0 else 0
    else:
       slopeIntercept.append([left[0],left[1]])
-      position = position + 1 if position < 15 else 15
 
-   if len(siPos) > 0 and len(siNeg) > 0:
-      delta = int('0b1000', 2) - position
-      position += (1 if delta > 0 else -1)
-
-   if position == 15:   
-      pass
-   elif position == 0:
-      pass
    # calculate floor based on ground lines
    [cv2.line(frame, (0, int(x[1])), (1000, int(x[0]*1000 + x[1])), (255,0,255), 2) for x in slopeIntercept]
-   '''
-   if len(slopeIntercept) == 2:
-      vrx = np.array([[MovingAverage, half_height], [0, slopeIntercept[1][1]], [width, width*slopeIntercept[0][0] + slopeIntercept[0][1]]], np.int32)
-      vrx = vrx.reshape((-1,1,2))
-      cv2.fillPoly(frame, [vrx], (0, 255, 255))
-   '''
+   
+   if not lBoo and not rBoo:
+      left = (-0.5, 0)
+      right = (0.5, width)
    return slopeIntercept
 
 clamp = lambda x, minn, maxx: max(min(maxx, x), minn)
@@ -226,9 +215,6 @@ if HOG or HOGOPTICAL:
       ROI = []
 #to end the stream after # of frames
 counter = 2000
-
-#To determine which side the robot is hugging
-position = int('0b1000', 2)
 
 #For intersection detection
 inter = False
@@ -347,75 +333,76 @@ while (cap.isOpened()):
 
    [cv2.circle(frame, (int(intersect[0]), int(intersect[1])), 10, (255, 0, 0), -1) for intersect in lineIntersects]
 
+   color = (0,255,0)
    if KM:
       floorSeg(blurgray)
-
-   numIntersects = len(lineIntersects)
-   color = (0,255,0)
-   if numIntersects != 0:
-      sum_x = sum([(x[0]-MovingAverage)*intersectWeight(MovingAverage, width, x[0]) for x in lineIntersects])
-      if KM:
-         if abs(kmeanC-MovingAverage) > 12:
-            #print("wumbo")
-            color = (0,255,255)
-         avg_x = (int(MovingAverage + sum_x) if abs(kmeanC-MovingAverage) > 12 else kmeanC)
-      else:
-         avg_x = int(MovingAverage + sum_x)
-      #sum_x = sum([x[0] for x in lineIntersects])
-      #avg_x = int(sum_x/numIntersects)
-
-      #this is where the avg circle is drawn
-      cv2.circle(frame, (avg_x, round(height/2)), 10, color, -1)
-
-      #update moving average
-      del MA[0]
-      MA.append(avg_x)      
-      MovingAverage = sum(MA)/len(MA)
-      csvlist.append(MovingAverage)
-      kmeanC = avg_x
-
-      if s:         
-         winsize = width/numwin
-         left = 8 + lAdj
-         right = 8 + rAdj
-         bothAdj = 0
-
-         thisBin = -1
-         for i in range(1,numwin+1):
-            if MovingAverage < i * winsize:
-               thisBin = i-1
-               break
-
-         if thisBin == -1:
-            print("WOAH NEGATIVE ERROR!!!")
-         else:
-            if sum(imBin) > 30:
-               diff = sum(imBin[0:numwin//2]) - sum(imBin[numwin//2+1:numwin])
-               if abs(diff) > 2:
-                  lAdj -= diff/abs(diff)
-                  rAdj += diff/abs(diff)
-                  lAdj = clamp(lAdj, -1, 1)
-                  rAdj = clamp(rAdj, -1, 1)
-               else:
-                  lAdj = 0
-                  rAdj = 0
-               imBin = [0]*numwin
-               
-            imBin[thisBin] += 1            
-            bothAdj = thisBin - numwin//2
-            left += bothAdj
-            right -= bothAdj
-
-            left = int(clamp(left, 0, 15))
-            right = int(clamp(right, 0, 15))
-               
-            print("left {}, right {}".format(left, right))
-            ser.write(chr((left << 4 | right)).encode())
-   else:
-      csvlist.append(MovingAverage)
-      cv2.circle(frame, (int(MovingAverage), round(height/2)), 10, (0, 0, 255), -1)
+      avg_x = kmeanC
+   
+   if not KM or abs(kmeanC-MovingAverage) > 30:
+      color = (0, 255, 255)
+      numIntersects = len(lineIntersects)
       
+      if numIntersects != 0:
+         sum_x = sum([(x[0]-MovingAverage)*intersectWeight(MovingAverage, width, x[0]) for x in lineIntersects])
+         
+         #recalculate centerpoint because gaussian is off!
+         if abs(sum_x) < 1:
+            color = (255,0,255)
+            sum_x = sum([x[0] for x in lineIntersects])
+            avg_x = int(sum_x//numIntersects)
+         else:
+            avg_x = int(MovingAverage + sum_x)
+      else:
+         color = (0, 0, 255)
+         avg_x = int(MovingAverage)
 
+
+   #update moving average
+   del MA[0]
+   MA.append(avg_x)      
+   MovingAverage = sum(MA)/len(MA)
+   csvlist.append(MovingAverage)
+   kmeanC = avg_x
+   #this is where the avg circle is drawn
+   cv2.circle(frame, (int(MovingAverage), round(height/2)), 10, color, -1)
+
+   if s:         
+      winsize = width/numwin
+      left = 8 + lAdj
+      right = 8 + rAdj
+      bothAdj = 0
+
+      thisBin = -1
+      for i in range(1,numwin+1):
+         if MovingAverage < i * winsize:
+            thisBin = i-1
+            break
+
+      if thisBin == -1:
+         print("WOAH NEGATIVE ERROR!!!")
+      else:
+         if sum(imBin) > 30:
+            diff = sum(imBin[0:numwin//2]) - sum(imBin[numwin//2+1:numwin])
+            if abs(diff) > 2:
+               lAdj -= diff/abs(diff)
+               rAdj += diff/abs(diff)
+               lAdj = clamp(lAdj, -1, 1)
+               rAdj = clamp(rAdj, -1, 1)
+            else:
+               lAdj = 0
+               rAdj = 0
+            imBin = [0]*numwin
+            
+         imBin[thisBin] += 1            
+         bothAdj = thisBin - numwin//2
+         left += bothAdj
+         right -= bothAdj
+
+         left = int(clamp(left, 0, 15))
+         right = int(clamp(right, 0, 15))
+            
+         print("left {}, right {}".format(left, right))
+         ser.write(chr((left << 4 | right)).encode())
 
    if HOG or HOGOPTICAL:
       for(x1,y1,x2,y2) in pick:
