@@ -18,7 +18,7 @@ HOG = False
 HOGOPTICAL = False
 KM=True
 RECORD = False
-filename = 'empty_rotate.'
+filename = 'chairdrive5.'
 height = 240
 width = 320
 
@@ -65,16 +65,15 @@ def floorSeg(fin):
 
 
    tempLabel = label.reshape(height//2, width, 1)
-   #print(tempLabel[height//2-1, width//2])
    B = Z[label.ravel()==1]
    center = np.uint8(center)
    res = center[label.flatten()]
-   res = np.zeros((len(res), 1))
-   res[label.ravel()==tempLabel[height//2-1, kmeanC]] = 1
+   res = np.ones((len(res), 1))
+   res[label.ravel()==tempLabel[height//2-1, kmeanC]] = 0#1
    res2 = res.reshape(bh.shape)
    thresh = cv2.threshold(res2, 0.5,255,cv2.THRESH_BINARY)[1]
 
-   labels = measure.label(thresh, neighbors=8, background=0)
+   labels = measure.label(thresh, neighbors=8, background=1)#0
    mask = np.zeros(thresh.shape,dtype="uint8")
 
    largestMask = None
@@ -97,7 +96,10 @@ def floorSeg(fin):
          if i[0][1] < peak[1]:
             peak = (i[0][0], i[0][1])
       kmeanC = peak[0]
-      
+      #M = np.float32([[1,0,0],[0,1, height//2]])
+      #dst = cv2.warpAffine(largestMask, M, (width, height))
+
+      return largestMask
       #cv2.imshow('res2',largestMask)
 
 left = (-0.5, 0)
@@ -123,8 +125,6 @@ def floorCalc(frame):
          intercept = y1-x1*slope
          slopeIntercept.append([slope,intercept])
 
-
-   #[print(abs((-x[1])/x[0]-MovingAverage)) for x in slopeIntercept]
    slopeIntercept = [x for x in slopeIntercept if (abs(-x[1]/x[0]-MovingAverage)  < 100)] #eliminate lines that don't meet the VP
    slopeIntercept = sorted(slopeIntercept)
    siPos = [x for x in slopeIntercept if x[0] > 0]
@@ -164,8 +164,11 @@ def floorCalc(frame):
    else:
       slopeIntercept.append([left[0],left[1]])
 
-   # calculate floor based on ground lines
-   [cv2.line(frame, (0, int(x[1])), (1000, int(x[0]*1000 + x[1])), (255,0,255), 2) for x in slopeIntercept]
+   # draw floor based on ground lines
+   if len(slopeIntercept) == 2:
+      i = intersect(slopeIntercept[0],slopeIntercept[1])
+      cv2.line(frame, (0, int(left[1])), (int(i[0]), int(i[1])), (255,255,255),2)
+      cv2.line(frame, (width, int(width*right[0] + right[1])), (int(i[0]), int(i[1])),(255,255,255),2)
    
    if not lBoo and not rBoo:
       left = (-0.5, 0)
@@ -214,7 +217,8 @@ if HOG or HOGOPTICAL:
       prvs = cv2.cvtColor(frame1,cv2.COLOR_BGR2GRAY)
       ROI = []
 #to end the stream after # of frames
-counter = 2000
+counter = 750
+count = 0
 
 #For intersection detection
 inter = False
@@ -326,7 +330,9 @@ while (cap.isOpened()):
    for i, si1 in enumerate(slopeIntercept):
       for si2 in slopeIntercept[i+1:]:
          if abs(si1[0] - si2[0]) > 0.5:
-            lineIntersects.append(intersect(si1, si2))
+            inter = intersect(si1,si2)
+            if inter[0] > 0 and inter[0] < width and inter[1] > 0 and inter[1] < height:
+               lineIntersects.append(inter)
 
    #gets rid of intersects in the top 1/3 or bottom 1/3 of the image
    #lineIntersects = [li for li in lineIntersects if (li[1] > height/3 and li[1] < height*2/3)]
@@ -335,26 +341,36 @@ while (cap.isOpened()):
 
    color = (0,255,0)
    if KM:
-      floorSeg(blurgray)
-      avg_x = kmeanC
-   
-   if not KM or abs(kmeanC-MovingAverage) > 30:
-      color = (0, 255, 255)
-      numIntersects = len(lineIntersects)
-      
-      if numIntersects != 0:
-         sum_x = sum([(x[0]-MovingAverage)*intersectWeight(MovingAverage, width, x[0]) for x in lineIntersects])
-         
+      mask = floorSeg(blurgray)
+      bh = bottomHalfImage(frame)
+      bh = cv2.bitwise_and(bh, bh, mask = mask)
+      frame[height//2:height] = bh
+      #cv2.bitwise_and(frame, frame, mask = mask)
+
+   sum_x = 0
+   numIntersects = len(lineIntersects)
+   if numIntersects != 0:
+      sum_x = sum([(x[0]-MovingAverage)*intersectWeight(MovingAverage, width, x[0]) for x in lineIntersects])
+      if abs(sum_x) < 1:
          #recalculate centerpoint because gaussian is off!
-         if abs(sum_x) < 1:
-            color = (255,0,255)
-            sum_x = sum([x[0] for x in lineIntersects])
-            avg_x = int(sum_x//numIntersects)
-         else:
-            avg_x = int(MovingAverage + sum_x)
+         color = (255,0,255)
+         sum_x = sum([x[0] for x in lineIntersects])
+         avg_x = int(sum_x//numIntersects)
       else:
-         color = (0, 0, 255)
-         avg_x = int(MovingAverage)
+         avg_x = int(MovingAverage + sum_x)
+   else:
+      color = (0, 0, 255)
+      avg_x = int(MovingAverage)
+   
+   if KM:
+      print(abs(kmeanC-MovingAverage))
+      if abs(kmeanC-MovingAverage) < 45:
+         if abs(kmeanC - avg_x) > 40 and numIntersects != 0:
+            if abs(kmeanC-MovingAverage) < abs(avg_x-MovingAverage):
+               avg_x = (kmeanC + avg_x)//2
+         else:
+            avg_x = kmeanC
+      
 
 
    #update moving average
@@ -411,12 +427,12 @@ while (cap.isOpened()):
    if cv2.waitKey(1) & 0xFF == ord('q'):
       break
 
-   if counter <= 0:
+   if counter <= count:
       break
 
    #display the resulting frame
    cv2.imshow('frame', frame)
-   counter -= 1
+   count += 1
    if RECORD:
       out.write(frame)
 
@@ -431,14 +447,23 @@ if s:
 if RECORD:
    out.release()
 
-print('{} FPS'.format(int((2000-counter)/(time.time() - start_time))))
+print('~~~~~~END~~~~~~')
+print('Frames: {}'.format(count))
+print('FPS: {}'.format(int((count)/(time.time() - start_time))))
 with open(filename + 'csv', 'r') as f:
    reader = csv.reader(f)
    lines = list(reader)
 
-diff = [abs(float(x)/2 - float(y)) for x,y in zip(lines[0], csvlist)]
-print(sum(diff)/len(diff))
-print(statistics.variance(csvlist))
-print(statistics.variance([float(x) for x in lines[0]]))
+lines = lines[0][0:750]
+csvlist = csvlist[0:750]
+#print(lines)
+#print(csvlist)
+
+diff = [abs(float(x)/2 - float(y)) for x,y in zip(lines, csvlist)]
+#print(diff)
+print('Avg diff from actual VP: {:.3f}'.format(sum(diff)/len(diff)))
+print('Variance of diff from actual VP: {:.3f}'.format(statistics.variance(diff)))
+#print('Actual VP Var: {:.3f}'.format(statistics.variance(csvlist)))
+#print('Calcul VP Var: {:.3f}'.format(statistics.variance([float(x) for x in lines[0]])))
 cap.release()
 cv2.destroyAllWindows()
