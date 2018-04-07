@@ -18,7 +18,7 @@ HOG = False
 HOGOPTICAL = False
 KM=True
 RECORD = False
-filename = 'chairdrive5.'
+filename = 'chairdrive1.'
 height = 240
 width = 320
 
@@ -34,6 +34,18 @@ def intersect(p1_si, p2_si):
    x = b/s
    y = p1_si[0]*x + p1_si[1]
    return (x, y)
+
+def km1d(mylist):
+   centroid = 0
+   newcentroid = len(mylist)//2
+   stopper = []
+   mylist = sorted(mylist)
+   while abs(centroid - newcentroid) > 1:
+      centroid = newcentroid
+      sum_x = sum([(x-mylist[centroid])*intersectWeight(mylist[centroid], max(mylist)-min(mylist), x) for x in mylist])
+      newcentroid += int(sum_x/abs(sum_x))
+   return mylist[newcentroid]
+      
 
 def writeListToCSV(data, filename):
    with open(filename, 'w') as myfile:
@@ -52,15 +64,17 @@ def topHalfImage(image):
 
 kmeanC = width//2
 def floorSeg(fin):
-   global kmeanC
+   global kmeanC, left, right
    fin = cv2.medianBlur(fin, 21)
+   gray = cv2.cvtColor(fin, cv2.COLOR_BGR2GRAY)
+   fin = cv2.medianBlur(gray, 21)
    bh=bottomHalfImage(fin)
    Z = bh.reshape((bh.shape[0]*bh.shape[1]))
 
    Z = np.float32(Z)
 
    criteria = (cv2.TERM_CRITERIA_MAX_ITER + cv2.TERM_CRITERIA_EPS, 10, 1.0)
-   K = 5
+   K = 7
    ret, label, center = cv2.kmeans(Z,K, None, criteria, 10,cv2.KMEANS_RANDOM_CENTERS)
 
 
@@ -88,12 +102,13 @@ def floorSeg(fin):
          maxNum = numPixels
          largestMask = labelMask
    if largestMask is not None:
-      cnts = cv2.findContours(largestMask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+      cnts = cv2.findContours(largestMask.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
       cnts = cnts[0] if imutils.is_cv2() else cnts[1]
 
       peak = (kmeanC, height)
+
       for i in cnts[0]:
-         if i[0][1] < peak[1]:
+         if i[0][1] < peak[1] and i[0][1]:
             peak = (i[0][0], i[0][1])
       kmeanC = peak[0]
       #M = np.float32([[1,0,0],[0,1, height//2]])
@@ -105,7 +120,7 @@ def floorSeg(fin):
 left = (-0.5, 0)
 right = (0.5, width)
 def floorCalc(frame):
-   global slopeIntercept, inter, left, right
+   global slopeIntercept, inter, left, right, nearWallAdj
 
    #intersection Threshold
    interThresh = 4
@@ -169,6 +184,20 @@ def floorCalc(frame):
       i = intersect(slopeIntercept[0],slopeIntercept[1])
       cv2.line(frame, (0, int(left[1])), (int(i[0]), int(i[1])), (255,255,255),2)
       cv2.line(frame, (width, int(width*right[0] + right[1])), (int(i[0]), int(i[1])),(255,255,255),2)
+   l = abs(math.atan(left[0])*180/math.pi)
+   r = math.atan(right[0])*180/math.pi
+
+   if lBoo and rBoo:
+      if abs(l-r) > 20: 
+         if l < r:
+            nearWallAdj = 1
+            #print('too close to right! left = {}'.format(l))
+         else:
+            nearWallAdj = -1
+            #print('too close to left! right = {}'.format(r))
+      else:
+         nearWallAdj = 0
+   
    
    if not lBoo and not rBoo:
       left = (-0.5, 0)
@@ -184,14 +213,14 @@ cap = cv2.VideoCapture(filename + 'avi')#'yavishtwalk.avi')#'empty_rotate.avi')
 
 csvlist = []
 timelist = []
-MA = [160]*5
+MA = [160]*1
 MovingAverage = 160
 
 # For driving adjustments
 numwin = 7
 imBin = [0]*numwin # for tracking stability
-lAdj = 0
-rAdj = 0
+Adj = 0
+nearWallAdj = 0
 
 # Arduino Drive Port Setup#
 try: 
@@ -233,6 +262,7 @@ while (cap.isOpened()):
    if frame is None:
       break
    frame = cv2.resize(frame, (width, height))
+   img = frame.copy()
 
    if HOG or HOGOPTICAL:
       (rect, weight) = hog.detectMultiScale(frame, winStride=(8,8),padding=(16,16),scale=1.05)
@@ -341,16 +371,16 @@ while (cap.isOpened()):
 
    color = (0,255,0)
    if KM:
-      mask = floorSeg(blurgray)
+      mask = floorSeg(img)
       bh = bottomHalfImage(frame)
       bh = cv2.bitwise_and(bh, bh, mask = mask)
       frame[height//2:height] = bh
-      #cv2.bitwise_and(frame, frame, mask = mask)
 
    sum_x = 0
    numIntersects = len(lineIntersects)
    if numIntersects != 0:
-      sum_x = sum([(x[0]-MovingAverage)*intersectWeight(MovingAverage, width, x[0]) for x in lineIntersects])
+      avg_x = int(km1d([x[0] for x in lineIntersects]))
+      '''
       if abs(sum_x) < 1:
          #recalculate centerpoint because gaussian is off!
          color = (255,0,255)
@@ -358,67 +388,67 @@ while (cap.isOpened()):
          avg_x = int(sum_x//numIntersects)
       else:
          avg_x = int(MovingAverage + sum_x)
+      '''
    else:
       color = (0, 0, 255)
       avg_x = int(MovingAverage)
    
    if KM:
-      print(abs(kmeanC-MovingAverage))
       if abs(kmeanC-MovingAverage) < 45:
-         if abs(kmeanC - avg_x) > 40 and numIntersects != 0:
+         if abs(kmeanC - avg_x) > 15 and numIntersects != 0:
             if abs(kmeanC-MovingAverage) < abs(avg_x-MovingAverage):
                avg_x = (kmeanC + avg_x)//2
          else:
             avg_x = kmeanC
-      
-
-
    #update moving average
    del MA[0]
    MA.append(avg_x)      
    MovingAverage = sum(MA)/len(MA)
    csvlist.append(MovingAverage)
-   kmeanC = avg_x
+   #kmeanC = avg_x
    #this is where the avg circle is drawn
    cv2.circle(frame, (int(MovingAverage), round(height/2)), 10, color, -1)
 
-   if s:         
-      winsize = width/numwin
-      left = 8 + lAdj
-      right = 8 + rAdj
-      bothAdj = 0
+   # Calculate the left and right motor speeds
+   winsize = width/numwin
+   lAdj = abs(Adj) if Adj < 0 else 0
+   rAdj = Adj if Adj > 0 else 0
+   lAdj += abs(nearWallAdj) if nearWallAdj < 0 else 0
+   rAdj += nearWallAdj if nearWallAdj > 0 else 0
+   
+   #print('L:{}, R:{}'.format(lAdj, rAdj))
+   lMotor = 8 + lAdj
+   rMotor = 8 + rAdj
+   bothAdj = 0
 
-      thisBin = -1
-      for i in range(1,numwin+1):
-         if MovingAverage < i * winsize:
-            thisBin = i-1
-            break
+   thisBin = -1
+   for i in range(1,numwin+1):
+      if MovingAverage < i * winsize:
+         thisBin = i-1
+         break
 
-      if thisBin == -1:
-         print("WOAH NEGATIVE ERROR!!!")
-      else:
-         if sum(imBin) > 30:
-            diff = sum(imBin[0:numwin//2]) - sum(imBin[numwin//2+1:numwin])
-            if abs(diff) > 2:
-               lAdj -= diff/abs(diff)
-               rAdj += diff/abs(diff)
-               lAdj = clamp(lAdj, -1, 1)
-               rAdj = clamp(rAdj, -1, 1)
-            else:
-               lAdj = 0
-               rAdj = 0
-            imBin = [0]*numwin
+   if thisBin == -1:
+      print("WOAH NEGATIVE ERROR!!!")
+   else:
+      if sum(imBin) > 30:
+         diff = sum(imBin[0:numwin//2]) - sum(imBin[numwin//2+1:numwin])
+         if abs(diff) > 2:
+            Adj += diff/abs(diff)
+         else:
+            Adj = 0
+         imBin = [0]*numwin
+         
+      imBin[thisBin] += 1            
+      bothAdj = thisBin - numwin//2
+      lMotor += bothAdj
+      rMotor -= bothAdj
+
+      lMotor = int(clamp(lMotor, 0, 15))
+      rMotor = int(clamp(rMotor, 0, 15))
             
-         imBin[thisBin] += 1            
-         bothAdj = thisBin - numwin//2
-         left += bothAdj
-         right -= bothAdj
-
-         left = int(clamp(left, 0, 15))
-         right = int(clamp(right, 0, 15))
-            
-         print("left {}, right {}".format(left, right))
-         ser.write(chr((left << 4 | right)).encode())
+   if s:
+      print("left {}, right {}".format(lMotor, rMotor))
+      ser.write(chr((lMotor << 4 | rMotor)).encode())
 
    if HOG or HOGOPTICAL:
       for(x1,y1,x2,y2) in pick:
