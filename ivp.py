@@ -16,9 +16,9 @@ from skimage import measure
 
 HOG = False
 HOGOPTICAL = False
-KM=True
+KM=False
 RECORD = False
-filename = 'chairdrive1.'
+filename = 'chairdrive5.'
 height = 240
 width = 320
 
@@ -213,7 +213,7 @@ cap = cv2.VideoCapture(filename + 'avi')#'yavishtwalk.avi')#'empty_rotate.avi')
 
 csvlist = []
 timelist = []
-MA = [160]*1
+MA = [160]*5
 MovingAverage = 160
 
 # For driving adjustments
@@ -305,7 +305,7 @@ while (cap.isOpened()):
    #Half height calculation
    half_height = round(height/2)
 
-   slopeIntercept = floorCalc(frame)
+   #slopeIntercept = floorCalc(frame)
    if slopeIntercept is None:
       slopeIntercept = []
    
@@ -380,15 +380,7 @@ while (cap.isOpened()):
    numIntersects = len(lineIntersects)
    if numIntersects != 0:
       avg_x = int(km1d([x[0] for x in lineIntersects]))
-      '''
-      if abs(sum_x) < 1:
-         #recalculate centerpoint because gaussian is off!
-         color = (255,0,255)
-         sum_x = sum([x[0] for x in lineIntersects])
-         avg_x = int(sum_x//numIntersects)
-      else:
-         avg_x = int(MovingAverage + sum_x)
-      '''
+      #avg_x = int(sum([x[0] for x in lineIntersects])/numIntersects)
    else:
       color = (0, 0, 255)
       avg_x = int(MovingAverage)
@@ -399,13 +391,14 @@ while (cap.isOpened()):
             if abs(kmeanC-MovingAverage) < abs(avg_x-MovingAverage):
                avg_x = (kmeanC + avg_x)//2
          else:
+            color = (255, 255, 0)
             avg_x = kmeanC
    #update moving average
    del MA[0]
    MA.append(avg_x)      
    MovingAverage = sum(MA)/len(MA)
    csvlist.append(MovingAverage)
-   #kmeanC = avg_x
+   kmeanC = avg_x
    #this is where the avg circle is drawn
    cv2.circle(frame, (int(MovingAverage), round(height/2)), 10, color, -1)
 
