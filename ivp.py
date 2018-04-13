@@ -16,9 +16,9 @@ from skimage import measure
 
 HOG = False
 HOGOPTICAL = False
-KM=False
+KM=True
 RECORD = False
-filename = 'chairdrive5.'
+filename = 'empty_rotate.'
 height = 240
 width = 320
 
@@ -145,13 +145,13 @@ def floorCalc(frame):
    siPos = [x for x in slopeIntercept if x[0] > 0]
    siNeg = [x for x in slopeIntercept if x[0] < 0]
 
-   flatLines = [x for x in slopeIntercept if abs(x[0]) < 0.3]
-   if len(flatLines) > interThresh:
-      if inter == True:
-         print("INTERSECTION? - Lots of Flats")
-      inter = True
-   else:
-      inter = False
+   #flatLines = [x for x in slopeIntercept if abs(x[0]) < 0.3]
+   #if len(flatLines) > interThresh:
+   #   if inter == True:
+   #      print("INTERSECTION? - Lots of Flats")
+   #   inter = True
+   #else:
+   #   inter = False
 
    # Gets the two most likely ground lines and uses them to find position
    slopeIntercept = []
@@ -190,12 +190,13 @@ def floorCalc(frame):
    if lBoo and rBoo:
       if abs(l-r) > 20: 
          if l < r:
-            nearWallAdj = 1
-            #print('too close to right! left = {}'.format(l))
+            nearWallAdj = -2
+            print('too close to right! left = {}'.format(l))
          else:
-            nearWallAdj = -1
-            #print('too close to left! right = {}'.format(r))
+            nearWallAdj = 2
+            print('too close to left! right = {}'.format(r))
       else:
+         print(abs(l-r))
          nearWallAdj = 0
    
    
@@ -209,7 +210,8 @@ clamp = lambda x, minn, maxx: max(min(maxx, x), minn)
 ##############################################
 ################## MAIN ######################
 ##############################################
-cap = cv2.VideoCapture(filename + 'avi')#'yavishtwalk.avi')#'empty_rotate.avi')
+#cap = cv2.VideoCapture(filename + 'avi')#'yavishtwalk.avi')#'empty_rotate.avi')
+cap = cv2.VideoCapture(0)#'yavishtwalk.avi')#'empty_rotate.avi')
 
 csvlist = []
 timelist = []
@@ -217,7 +219,7 @@ MA = [160]*5
 MovingAverage = 160
 
 # For driving adjustments
-numwin = 7
+numwin = 5
 imBin = [0]*numwin # for tracking stability
 Adj = 0
 nearWallAdj = 0
@@ -225,8 +227,7 @@ nearWallAdj = 0
 # Arduino Drive Port Setup#
 try: 
    adp = '/dev/ttyACM0'
-   ser = serial.Serial(adp)
-   ser.setBaudrate(115200)
+   ser = serial.Serial(adp, baudrate=115200)
    time.sleep(3)
    s = True
 except:
@@ -305,7 +306,7 @@ while (cap.isOpened()):
    #Half height calculation
    half_height = round(height/2)
 
-   #slopeIntercept = floorCalc(frame)
+   slopeIntercept = floorCalc(frame)
    if slopeIntercept is None:
       slopeIntercept = []
    
@@ -433,12 +434,19 @@ while (cap.isOpened()):
          
       imBin[thisBin] += 1            
       bothAdj = thisBin - numwin//2
-      lMotor += bothAdj
-      rMotor -= bothAdj
+      if not bothAdj:
+         #lMotor += bothAdj
+         #rMotor -= bothAdj
 
-      lMotor = int(clamp(lMotor, 0, 15))
-      rMotor = int(clamp(rMotor, 0, 15))
-            
+         lMotor = int(clamp(lMotor, 0, 15))
+         rMotor = int(clamp(rMotor, 0, 15))
+      else:
+         if bothAdj < 0:
+            lMotor = int(clamp(rMotor/2 + 1,0,15))
+            rMotor = int(clamp(rMotor,0,15))
+         else:
+            lMotor = int(clamp(lMotor,0,15))
+            rMotor = int(clamp(lMotor/2 + 1,0,15)) 
    if s:
       print("left {}, right {}".format(lMotor, rMotor))
       ser.write(chr((lMotor << 4 | rMotor)).encode())
@@ -450,8 +458,9 @@ while (cap.isOpened()):
    if cv2.waitKey(1) & 0xFF == ord('q'):
       break
 
-   if counter <= count:
-      break
+   #if counter <= count:
+   #   pass
+   #   break
 
    #display the resulting frame
    cv2.imshow('frame', frame)
@@ -465,6 +474,7 @@ while (cap.isOpened()):
 
 if s:
    ser.write(chr(0).encode())
+   time.sleep(1)
    ser.close()
 
 if RECORD:
