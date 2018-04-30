@@ -14,11 +14,11 @@ import math
 import statistics
 from skimage import measure
 
-HOG = False
-HOGOPTICAL = False
+HOG = True
+HOGOPTICAL = True
 KM=True
 RECORD = False
-filename = 'empty_rotate.'
+filename = 'chairdrive3.'
 height = 240
 width = 320
 
@@ -196,7 +196,7 @@ def floorCalc(frame):
             nearWallAdj = 2
             print('too close to left! right = {}'.format(r))
       else:
-         print(abs(l-r))
+         #print(abs(l-r))
          nearWallAdj = 0
    
    
@@ -205,12 +205,46 @@ def floorCalc(frame):
       right = (0.5, width)
    return slopeIntercept
 
+def turnDrive(direction, severity, rt):
+   global s, ret, frame
+   if s:
+      #rotate
+      print("ROtate")
+      for i in range (0, severity//20):
+         if direction > 0:
+            rMotor = 8
+            lMotor = 0
+         else:
+            rMotor = 0
+            lMotor = 8
+         ser.write(chr((lMotor << 4 | rMotor)).encode())
+         time.sleep(rt)
+      #drive straight
+      for i in range(0, severity//10):
+         rMotor = 8
+         lMotor = 8
+         ser.write(chr((lMotor << 4 | rMotor)).encode())
+         time.sleep(rt)
+      #reorient
+      print("ROtate back")
+      for i in range (0, severity//20):
+         if direction > 0:
+            rMotor = 0
+            lMotor = 8
+         else:
+            rMotor = 8
+            lMotor = 8
+         ser.write(chr((lMotor << 4 | rMotor)).encode())
+         time.sleep(rt)
+      ret, frame = cap.read()
+      frame = cv2.resize(frame, (width, height))
+
 clamp = lambda x, minn, maxx: max(min(maxx, x), minn)
 
 ##############################################
 ################## MAIN ######################
 ##############################################
-#cap = cv2.VideoCapture(filename + 'avi')#'yavishtwalk.avi')#'empty_rotate.avi')
+#cap = cv2.VideoCapture(filename + 'avi')
 cap = cv2.VideoCapture(0)#'yavishtwalk.avi')#'empty_rotate.avi')
 
 csvlist = []
@@ -223,6 +257,8 @@ numwin = 5
 imBin = [0]*numwin # for tracking stability
 Adj = 0
 nearWallAdj = 0
+personAvoidance = 0
+personAvoidCount = 0
 
 # Arduino Drive Port Setup#
 try: 
@@ -247,7 +283,7 @@ if HOG or HOGOPTICAL:
       prvs = cv2.cvtColor(frame1,cv2.COLOR_BGR2GRAY)
       ROI = []
 #to end the stream after # of frames
-counter = 750
+counter = 2000
 count = 0
 
 #For intersection detection
@@ -257,6 +293,7 @@ start_time = time.time()
 ###########################################################
 #######################LOOP################################
 ###########################################################
+runTime = 0
 while (cap.isOpened()):
    framelock_start = time.time()
    ret, frame = cap.read()
@@ -323,12 +360,24 @@ while (cap.isOpened()):
    [[templin.append([x1,y1,x2,y2]) for x1,y1,x2,y2 in line] for line in lines]
    lines = templin
 
+   runTime = time.time() - framelock_start
    if HOG or HOGOPTICAL:
+      if len(pick) == 0 and personAvoidCount == 0:
+         personAvoidance = 0
       for xa,ya,xb,yb in pick:
+         personLoc = int((xa+xb)/2 - MovingAverage)
+         if not personLoc:
+            personLoc += 1
+         personAvoidance = personLoc//abs(personLoc)
+         mult = 1 + (1 if yb > 200 else 0)
+         personAvoidance = personAvoidance * mult * 2
+         if personAvoidCount == 0:
+            personAvoidCount = 20
+            turnDrive(personAvoidance, yb, runTime)
          newLin = []
          for x1,y1,x2,y2 in lines:
-            if not ((xa < x1 and x1 < xb) and (ya < y1 and y1 < yb)) or not ((xa < x2 and x2 < xb) and (ya < y2 and y2 < yb)):
-               newLin.append([x1,y1,x2,y2])
+            #if not ((xa < x1 and x1 < xb) and (ya < y1 and y1 < yb)) and not ((xa < x2 and x2 < xb) and (ya < y2 and y2 < yb)):
+            newLin.append([x1,y1,x2,y2])
 
          lines = newLin
          if HOGOPTICAL:
@@ -343,6 +392,7 @@ while (cap.isOpened()):
             yB = int(clamp(max(yb+avgY,yb), 0, height))
 
             ROI.append((xA, yA, xB, yB))
+      #print("Person Avoidance = {}".format(personAvoidance))
    for x1,y1,x2,y2 in lines:
       if x2-x1 == 0:
          continue
@@ -403,6 +453,9 @@ while (cap.isOpened()):
    #this is where the avg circle is drawn
    cv2.circle(frame, (int(MovingAverage), round(height/2)), 10, color, -1)
 
+   #########################################################
+   ################DRIVING TIME#############################
+   #########################################################
    # Calculate the left and right motor speeds
    winsize = width/numwin
    lAdj = abs(Adj) if Adj < 0 else 0
@@ -410,7 +463,6 @@ while (cap.isOpened()):
    lAdj += abs(nearWallAdj) if nearWallAdj < 0 else 0
    rAdj += nearWallAdj if nearWallAdj > 0 else 0
    
-   #print('L:{}, R:{}'.format(lAdj, rAdj))
    lMotor = 8 + lAdj
    rMotor = 8 + rAdj
    bothAdj = 0
@@ -424,7 +476,7 @@ while (cap.isOpened()):
    if thisBin == -1:
       print("WOAH NEGATIVE ERROR!!!")
    else:
-      if sum(imBin) > 30:
+      if sum(imBin) > 10: #30
          diff = sum(imBin[0:numwin//2]) - sum(imBin[numwin//2+1:numwin])
          if abs(diff) > 2:
             Adj += diff/abs(diff)
@@ -447,8 +499,20 @@ while (cap.isOpened()):
          else:
             lMotor = int(clamp(lMotor,0,15))
             rMotor = int(clamp(lMotor/2 + 1,0,15)) 
+   if HOG or HOGOPTICAL:
+      if personAvoidance and personAvoidCount == 0:
+         personAvoidCount = 1
+      if personAvoidCount > 0:
+         personAvoidCount -= 1
+      #lMotor = lMotor - personAvoidance
+      #rMotor = rMotor + personAvoidance
+   
+   print(personAvoidCount)
+   #print('L:{}, R:{}'.format(lMotor, rMotor))
    if s:
       print("left {}, right {}".format(lMotor, rMotor))
+      lMotor = int(lMotor)
+      rMotor = int(rMotor)
       ser.write(chr((lMotor << 4 | rMotor)).encode())
 
    if HOG or HOGOPTICAL:
@@ -458,9 +522,9 @@ while (cap.isOpened()):
    if cv2.waitKey(1) & 0xFF == ord('q'):
       break
 
-   #if counter <= count:
-   #   pass
-   #   break
+   if counter <= count:
+      pass
+      #break
 
    #display the resulting frame
    cv2.imshow('frame', frame)
@@ -469,7 +533,6 @@ while (cap.isOpened()):
       out.write(frame)
 
    #timelist.append(time.time() - start_time)
-   #delta_time = time.time() - framelock_start
    #time.sleep(abs(0.0416-delta_time))
 
 if s:
@@ -487,13 +550,14 @@ with open(filename + 'csv', 'r') as f:
    reader = csv.reader(f)
    lines = list(reader)
 
-lines = lines[0][0:750]
-csvlist = csvlist[0:750]
+lines = lines[0][0:count]
+csvlist = csvlist[0:count]
 #print(lines)
 #print(csvlist)
 
 diff = [abs(float(x)/2 - float(y)) for x,y in zip(lines, csvlist)]
 #print(diff)
+print(len(diff))
 print('Avg diff from actual VP: {:.3f}'.format(sum(diff)/len(diff)))
 print('Variance of diff from actual VP: {:.3f}'.format(statistics.variance(diff)))
 #print('Actual VP Var: {:.3f}'.format(statistics.variance(csvlist)))

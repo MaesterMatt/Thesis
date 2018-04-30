@@ -46,7 +46,7 @@ void loop() {
     }
   }
   else{
-    delay(70);
+    delay(60);
     md.setM1Speed(0);
     md.setM2Speed(0);
     stopIfFault();
