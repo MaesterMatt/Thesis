@@ -14,11 +14,13 @@ import math
 import statistics
 from skimage import measure
 
-HOG = True
-HOGOPTICAL = True
-KM=True
+HOG = False
+HOGOPTICAL = False
+KM= True
 RECORD = False
-filename = 'chairdrive3.'
+GAUS = True
+FLOOR = True
+filename = 'RealWorldTesting/cs.'
 height = 240
 width = 320
 
@@ -343,7 +345,8 @@ while (cap.isOpened()):
    #Half height calculation
    half_height = round(height/2)
 
-   slopeIntercept = floorCalc(frame)
+   if FLOOR:
+      slopeIntercept = floorCalc(frame)
    if slopeIntercept is None:
       slopeIntercept = []
    
@@ -430,8 +433,10 @@ while (cap.isOpened()):
    sum_x = 0
    numIntersects = len(lineIntersects)
    if numIntersects != 0:
-      avg_x = int(km1d([x[0] for x in lineIntersects]))
-      #avg_x = int(sum([x[0] for x in lineIntersects])/numIntersects)
+      if GAUS:
+         avg_x = int(km1d([x[0] for x in lineIntersects]))
+      else:
+         avg_x = int(sum([x[0] for x in lineIntersects])/numIntersects)
    else:
       color = (0, 0, 255)
       avg_x = int(MovingAverage)
@@ -507,7 +512,7 @@ while (cap.isOpened()):
       #lMotor = lMotor - personAvoidance
       #rMotor = rMotor + personAvoidance
    
-   print(personAvoidCount)
+   #print(personAvoidCount)
    #print('L:{}, R:{}'.format(lMotor, rMotor))
    if s:
       print("left {}, right {}".format(lMotor, rMotor))
